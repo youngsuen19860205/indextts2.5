@@ -32,8 +32,19 @@ parser.add_argument("--cuda_kernel", action="store_true", default=False, help="U
 parser.add_argument("--accel", action="store_true", default=False, help="Use GPT2 acceleration engine if available")
 parser.add_argument("--torch_compile", action="store_true", default=False, help="Use torch.compile to optimize s2mel if available")
 parser.add_argument("--qwen_emo", action="store_true", default=False, help="Load QwenEmotion even on a low-VRAM GPU, where it is skipped by default")
+parser.add_argument(
+    "--reuse_spk_cond_for_emo",
+    action="store_true",
+    default=False,
+    help=(
+        "IndexTTS-2.5 only: reuse speaker conditioning for the default emotion to reduce "
+        "reference encoding compute; this may change voice or emotion"
+    ),
+)
 parser.add_argument("--gui_seg_tokens", type=int, default=120, help="GUI: Max tokens per generation segment")
 cmd_args = parser.parse_args()
+if cmd_args.reuse_spk_cond_for_emo and cmd_args.version != "2.5":
+    parser.error("--reuse_spk_cond_for_emo is only supported with --version 2.5")
 
 # Validate optional acceleration dependencies early, so missing extras fail
 # at startup instead of halfway through inference.
@@ -155,6 +166,7 @@ def build_tts(use_accel=False, use_torch_compile=False):
         if HALF_PRECISION and not use_bf16:
             print(">> BF16 is not supported on this device, falling back to full precision.")
         kwargs["use_bf16"] = use_bf16
+        kwargs["reuse_spk_cond_for_emo"] = cmd_args.reuse_spk_cond_for_emo
     else:
         kwargs["use_fp16"] = HALF_PRECISION
     return IndexTTS2(**kwargs)
