@@ -16,6 +16,8 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(current_dir)
 sys.path.append(os.path.join(current_dir, "indextts"))
 
+from indextts.utils.precision import cuda_supports_native_bf16, select_half_precision
+
 import argparse
 parser = argparse.ArgumentParser(
     description="IndexTTS WebUI",
@@ -26,7 +28,7 @@ parser.add_argument("--port", type=int, default=7860, help="Port to run the web 
 parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to run the web UI on")
 parser.add_argument("--model_dir", type=str, default="./checkpoints", help="Model checkpoints directory")
 parser.add_argument("--version", type=str, default="2.5", choices=["2", "2.5"], help="Model version to use")
-parser.add_argument("--fp16", action="store_true", default=False, help="Use FP16 for inference if available")
+parser.add_argument("--fp16", action="store_true", default=False, help="Use half precision for inference if available")
 parser.add_argument("--deepspeed", action="store_true", default=False, help="Use DeepSpeed to accelerate if available")
 parser.add_argument("--cuda_kernel", action="store_true", default=False, help="Use CUDA kernel for inference if available")
 parser.add_argument("--accel", action="store_true", default=False, help="Use GPT2 acceleration engine if available")
@@ -151,10 +153,16 @@ def build_tts(use_accel=False, use_torch_compile=False):
         use_qwen_emo=LOAD_QWEN_EMO,
     )
     if IS_V25:
-        use_bf16 = HALF_PRECISION and torch.cuda.is_bf16_supported()
-        if HALF_PRECISION and not use_bf16:
-            print(">> BF16 is not supported on this device, falling back to full precision.")
-        kwargs["use_bf16"] = use_bf16
+        cuda_available = torch.cuda.is_available()
+        precision = select_half_precision(
+            enabled=HALF_PRECISION,
+            cuda_available=cuda_available,
+            native_bf16_supported=cuda_supports_native_bf16(torch),
+        )
+        kwargs["use_fp16"] = precision == "fp16"
+        kwargs["use_bf16"] = precision == "bf16"
+        if precision is not None:
+            print(f">> IndexTTS-2.5 UnifiedVoice/GPT stack will use {precision.upper()}.")
     else:
         kwargs["use_fp16"] = HALF_PRECISION
     return IndexTTS2(**kwargs)

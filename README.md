@@ -239,6 +239,20 @@ from indextts.infer_v2_5 import IndexTTS2
 tts = IndexTTS2(cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_bf16=True)
 ```
 
+IndexTTS2.5 can alternatively use FP16 for its UnifiedVoice/GPT stack on CUDA
+devices without native BF16 support:
+
+```python
+tts = IndexTTS2(cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_fp16=True)
+```
+
+`use_fp16` and `use_bf16` are mutually exclusive and both default to `False`.
+The semantic codec, S2Mel, BigVGAN, and reference encoders remain in full
+precision. FP16 reduces GPT memory use, but it does not reduce the model's
+mathematical operation count or guarantee faster or numerically identical
+output. The WebUI's existing `--fp16` option prefers native BF16 and falls back
+to FP16 when native BF16 is unavailable.
+
 #### 1. Voice cloning with a single reference audio
 
 ```python

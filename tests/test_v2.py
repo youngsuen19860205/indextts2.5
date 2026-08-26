@@ -7,6 +7,7 @@ Run with:
 CI only (no GPU):
     uv run --extra test pytest tests/test_v2.py -v -m "not gpu"
 """
+import ast
 import importlib
 import sys
 import types
@@ -174,6 +175,118 @@ def test_modelscope_single_file_download_matches_local_path(tmp_path, monkeypatc
     assert got == str(local_path)
     assert local_path.exists()
     assert local_path.read_bytes() == expected_bytes
+
+
+# -- IndexTTS 2.5 precision selection (no GPU) --------------------------------
+
+def test_25_use_fp16_is_appended_to_constructor_signature():
+    """The new option must not shift any existing positional arguments."""
+    source = Path("indextts/infer_v2_5.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
+    cls = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "IndexTTS2")
+    init = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "__init__")
+
+    original_args = [
+        "self", "cfg_path", "model_dir", "use_bf16", "device", "use_cuda_kernel",
+        "use_deepspeed", "use_accel", "use_torch_compile", "use_qwen_emo",
+    ]
+    arg_names = [arg.arg for arg in init.args.args]
+    assert arg_names[:len(original_args)] == original_args
+    assert arg_names[len(original_args)] == "use_fp16"
+
+    default_offset = len(arg_names) - len(init.args.defaults)
+    fp16_default = init.args.defaults[arg_names.index("use_fp16") - default_offset]
+    assert isinstance(fp16_default, ast.Constant)
+    assert fp16_default.value is False
+
+
+@pytest.mark.parametrize(
+    "use_fp16,use_bf16,device,expected",
+    [
+        (False, False, "cuda:0", None),
+        (True, False, "cuda:0", "fp16"),
+        (False, True, "cuda:0", "bf16"),
+        (True, False, "xpu", "fp16"),
+        (False, True, "xpu", "bf16"),
+        (True, False, "cpu", None),
+        (False, True, "cpu:0", None),
+        (True, False, "mps", None),
+        (False, True, "mps:0", None),
+    ],
+)
+def test_25_resolve_gpt_precision(use_fp16, use_bf16, device, expected):
+    from indextts.utils.precision import resolve_gpt_precision
+
+    assert resolve_gpt_precision(
+        use_fp16=use_fp16,
+        use_bf16=use_bf16,
+        device=device,
+    ) == expected
+
+
+def test_25_rejects_fp16_and_bf16_together():
+    from indextts.utils.precision import resolve_gpt_precision
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        resolve_gpt_precision(use_fp16=True, use_bf16=True, device="cuda:0")
+
+
+@pytest.mark.parametrize(
+    "enabled,cuda_available,native_bf16_supported,expected",
+    [
+        (False, False, False, None),
+        (False, True, True, None),
+        (True, False, False, None),
+        (True, True, False, "fp16"),
+        (True, True, True, "bf16"),
+    ],
+)
+def test_25_selects_webui_half_precision(
+        enabled, cuda_available, native_bf16_supported, expected
+):
+    from indextts.utils.precision import select_half_precision
+
+    assert select_half_precision(
+        enabled=enabled,
+        cuda_available=cuda_available,
+        native_bf16_supported=native_bf16_supported,
+    ) == expected
+
+
+def test_25_native_bf16_check_disables_emulation():
+    from indextts.utils.precision import cuda_supports_native_bf16
+
+    calls = []
+
+    def is_bf16_supported(**kwargs):
+        calls.append(kwargs)
+        return True
+
+    torch_stub = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(
+            is_available=lambda: True,
+            is_bf16_supported=is_bf16_supported,
+        )
+    )
+
+    assert cuda_supports_native_bf16(torch_stub) is True
+    assert calls == [{"including_emulation": False}]
+
+
+def test_25_native_bf16_check_skips_non_cuda_devices():
+    from indextts.utils.precision import cuda_supports_native_bf16
+
+    def unexpected_probe(**kwargs):
+        raise AssertionError("BF16 support should not be probed without CUDA")
+
+    torch_stub = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(
+            is_available=lambda: False,
+            is_bf16_supported=unexpected_probe,
+        )
+    )
+
+    assert cuda_supports_native_bf16(torch_stub) is False
 
 
 # -- Text segmentation (no GPU) -----------------------------------------------

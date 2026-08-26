@@ -25,6 +25,7 @@ from indextts.utils.front import TextNormalizer
 from indextts.utils.tokenizer import get_tokenizer, lang_to_token
 from indextts.utils.ja_g2p import JapaneseG2PProcessor
 from indextts.utils.nemo_tn import normalize_text as nemo_text_normalize
+from indextts.utils.precision import resolve_gpt_precision
 
 from indextts.s2mel.modules.commons import load_checkpoint2, MyModel
 from indextts.s2mel.modules.bigvgan import bigvgan
@@ -76,13 +77,14 @@ def apply_pronunciation_annotations(text: str) -> str:
 class IndexTTS2:
     def __init__(
             self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_bf16=False, device=None,
-            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False, use_qwen_emo=False
+            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False, use_qwen_emo=False,
+            use_fp16=False
     ):
         """
         Args:
             cfg_path (str): path to the config file.
             model_dir (str): path to the model directory.
-            use_bf16 (bool): whether to use bf16.
+            use_bf16 (bool): whether to use BF16 for the UnifiedVoice/GPT stack.
             device (str): device to use (e.g., 'cuda:0', 'cpu'). If None, it will be set automatically based on the availability of CUDA or MPS.
             use_cuda_kernel (None | bool): whether to use BigVGan custom fused activation CUDA kernel, only for CUDA device.
             use_deepspeed (bool): whether to use DeepSpeed or not.
@@ -91,32 +93,43 @@ class IndexTTS2:
             use_qwen_emo (bool): if True, load the QwenEmotion text-to-emotion model.
                 Required for ``infer(..., use_emo_text=True)``. Attempting to use emotion-text
                 guidance when this is disabled will raise a RuntimeError.
+            use_fp16 (bool): whether to use FP16 for the UnifiedVoice/GPT stack.
+                Mutually exclusive with ``use_bf16``. The semantic codec, S2Mel,
+                BigVGAN, and reference encoders remain in full precision.
         """
         if device is not None:
             self.device = device
-            self.use_bf16 = False if device == "cpu" else use_bf16
             self.use_cuda_kernel = use_cuda_kernel is not None and use_cuda_kernel and device.startswith("cuda")
         elif torch.cuda.is_available():
             self.device = "cuda:0"
-            self.use_bf16 = use_bf16
             self.use_cuda_kernel = use_cuda_kernel is None or use_cuda_kernel
         elif hasattr(torch, "xpu") and torch.xpu.is_available():
             self.device = "xpu"
-            self.use_bf16 = use_bf16
             self.use_cuda_kernel = False
         elif hasattr(torch, "mps") and torch.backends.mps.is_available():
             self.device = "mps"
-            self.use_bf16 = False  # Use bfloat16 on MPS is overhead than float32
             self.use_cuda_kernel = False
         else:
             self.device = "cpu"
-            self.use_bf16 = False
             self.use_cuda_kernel = False
             print(">> Be patient, it may take a while to run in CPU mode.")
 
+        precision = resolve_gpt_precision(
+            use_fp16=use_fp16,
+            use_bf16=use_bf16,
+            device=self.device,
+        )
+        self.use_fp16 = precision == "fp16"
+        self.use_bf16 = precision == "bf16"
+
         self.cfg = OmegaConf.load(cfg_path)
         self.model_dir = model_dir
-        self.dtype = torch.bfloat16 if self.use_bf16 else None
+        if self.use_fp16:
+            self.dtype = torch.float16
+        elif self.use_bf16:
+            self.dtype = torch.bfloat16
+        else:
+            self.dtype = None
         self.stop_mel_token = self.cfg.gpt.stop_mel_token
         self.use_accel = use_accel
         self.use_torch_compile = use_torch_compile
@@ -139,11 +152,11 @@ class IndexTTS2:
         self.gpt = UnifiedVoice(**self.cfg.gpt, use_accel=self.use_accel, spk_cond_mode="campplus")
         self.gpt_path = os.path.join(self.model_dir, self.cfg.gpt_checkpoint)
         load_checkpoint(self.gpt, self.gpt_path)
-        self.gpt = self.gpt.to(self.device)
-        if self.use_bf16:
-            self.gpt.eval().bfloat16()
-        else:
-            self.gpt.eval()
+        if self.dtype is not None:
+            # Cast on CPU before moving to the accelerator so low-VRAM devices
+            # never need to hold a complete FP32 GPT stack during startup.
+            self.gpt = self.gpt.to(dtype=self.dtype)
+        self.gpt = self.gpt.to(self.device).eval()
         print(">> GPT weights restored from:", self.gpt_path)
 
         if use_deepspeed:
@@ -153,7 +166,7 @@ class IndexTTS2:
                 use_deepspeed = False
                 print(f">> Failed to load DeepSpeed. Falling back to normal inference. Error: {e}")
 
-        self.gpt.post_init_gpt2_config(use_deepspeed=use_deepspeed, kv_cache=True, half=self.use_bf16)
+        self.gpt.post_init_gpt2_config(use_deepspeed=use_deepspeed, kv_cache=True, half=self.dtype is not None)
 
         if self.use_cuda_kernel:
             # preload the CUDA kernel for BigVGAN
