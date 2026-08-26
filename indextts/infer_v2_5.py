@@ -76,7 +76,8 @@ def apply_pronunciation_annotations(text: str) -> str:
 class IndexTTS2:
     def __init__(
             self, cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_bf16=False, device=None,
-            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False, use_qwen_emo=False
+            use_cuda_kernel=None,use_deepspeed=False, use_accel=False, use_torch_compile=False, use_qwen_emo=False,
+            reuse_spk_cond_for_emo=False
     ):
         """
         Args:
@@ -91,6 +92,11 @@ class IndexTTS2:
             use_qwen_emo (bool): if True, load the QwenEmotion text-to-emotion model.
                 Required for ``infer(..., use_emo_text=True)``. Attempting to use emotion-text
                 guidance when this is disabled will raise a RuntimeError.
+            reuse_spk_cond_for_emo (bool): if True, reuse the speaker conditioning as the
+                default emotion conditioning when no explicit emotion audio, vector, or text
+                is supplied. This avoids one reference encoder pass, but may change the output
+                because speaker and emotion audio use different preprocessing paths. It does
+                not materially reduce resident memory.
         """
         if device is not None:
             self.device = device
@@ -120,6 +126,13 @@ class IndexTTS2:
         self.stop_mel_token = self.cfg.gpt.stop_mel_token
         self.use_accel = use_accel
         self.use_torch_compile = use_torch_compile
+        self.reuse_spk_cond_for_emo = reuse_spk_cond_for_emo
+        if self.reuse_spk_cond_for_emo:
+            print(
+                ">> Reusing speaker conditioning for default emotion. This reduces reference "
+                "encoding compute, but may change voice or emotion because the speaker and "
+                "emotion audio preprocessing paths differ."
+            )
 
         # Detect low-VRAM GPUs (< 10 GB) to enable automatic text chunking
         self.low_vram = False
@@ -288,6 +301,48 @@ class IndexTTS2:
         feat = vq_emb.hidden_states[17]  # (B, T, C)
         feat = (feat - self.semantic_mean) / self.semantic_std
         return feat
+
+    def _should_reuse_spk_cond_for_emo(self, emo_audio_prompt, emo_vector, use_emo_text):
+        return (
+            self.reuse_spk_cond_for_emo
+            and emo_audio_prompt is None
+            and emo_vector is None
+            and not use_emo_text
+        )
+
+    def _get_emo_cond_emb(self, emo_audio_prompt, spk_cond_emb, reuse_spk_cond, verbose):
+        if reuse_spk_cond:
+            return spk_cond_emb
+
+        if self.cache_emo_cond is None or self.cache_emo_audio_prompt != emo_audio_prompt:
+            if self.cache_emo_cond is not None:
+                self.cache_emo_cond = None
+                torch.cuda.empty_cache()
+            emo_audio, _ = self._load_and_cut_audio(emo_audio_prompt, 15, verbose, sr=16000)
+            emo_inputs = self.extract_features(emo_audio, sampling_rate=16000, return_tensors="pt")
+            emo_input_features = emo_inputs["input_features"]
+            emo_attention_mask = emo_inputs["attention_mask"]
+            emo_input_features = emo_input_features.to(self.device)
+            emo_attention_mask = emo_attention_mask.to(self.device)
+            emo_cond_emb = self.get_emb(emo_input_features, emo_attention_mask)
+
+            self.cache_emo_cond = emo_cond_emb
+            self.cache_emo_audio_prompt = emo_audio_prompt
+        else:
+            emo_cond_emb = self.cache_emo_cond
+        return emo_cond_emb
+
+    def _get_emovec(self, spk_cond_emb, emo_cond_emb, cond_lengths, emo_cond_lengths,
+                    emo_alpha, reuse_spk_cond):
+        if reuse_spk_cond:
+            return self.gpt.get_emovec(spk_cond_emb, cond_lengths)
+        return self.gpt.merge_emovec(
+            spk_cond_emb,
+            emo_cond_emb,
+            cond_lengths,
+            emo_cond_lengths,
+            alpha=emo_alpha,
+        )
 
     @torch.no_grad()
     def get_scode(self, inputs):
@@ -580,6 +635,12 @@ class IndexTTS2:
                   f"emo_text:{emo_text}")
         start_time = time.perf_counter()
 
+        reuse_spk_cond = self._should_reuse_spk_cond_for_emo(
+            emo_audio_prompt,
+            emo_vector,
+            use_emo_text,
+        )
+
         if use_emo_text or emo_vector is not None:
             # we're using a text or emotion vector guidance; so we must remove
             # "emotion reference voice", to ensure we use correct emotion mixing!
@@ -679,22 +740,12 @@ class IndexTTS2:
             emovec_mat = torch.sum(emovec_mat, 0)
             emovec_mat = emovec_mat.unsqueeze(0)
 
-        if self.cache_emo_cond is None or self.cache_emo_audio_prompt != emo_audio_prompt:
-            if self.cache_emo_cond is not None:
-                self.cache_emo_cond = None
-                torch.cuda.empty_cache()
-            emo_audio, _ = self._load_and_cut_audio(emo_audio_prompt,15,verbose,sr=16000)
-            emo_inputs = self.extract_features(emo_audio, sampling_rate=16000, return_tensors="pt")
-            emo_input_features = emo_inputs["input_features"]
-            emo_attention_mask = emo_inputs["attention_mask"]
-            emo_input_features = emo_input_features.to(self.device)
-            emo_attention_mask = emo_attention_mask.to(self.device)
-            emo_cond_emb = self.get_emb(emo_input_features, emo_attention_mask)
-
-            self.cache_emo_cond = emo_cond_emb
-            self.cache_emo_audio_prompt = emo_audio_prompt
-        else:
-            emo_cond_emb = self.cache_emo_cond
+        emo_cond_emb = self._get_emo_cond_emb(
+            emo_audio_prompt,
+            spk_cond_emb,
+            reuse_spk_cond,
+            verbose,
+        )
 
         self._set_gr_progress(0.1, "text processing...")
         lang_prefix = f'<|{lang.lower()}|> '
@@ -756,12 +807,13 @@ class IndexTTS2:
             m_start_time = time.perf_counter()
             with torch.no_grad():
                 with torch.amp.autocast(text_tokens.device.type, enabled=self.dtype is not None, dtype=self.dtype):
-                    emovec = self.gpt.merge_emovec(
+                    emovec = self._get_emovec(
                         spk_cond_emb,
                         emo_cond_emb,
                         torch.tensor([spk_cond_emb.shape[-1]], device=text_tokens.device),
                         torch.tensor([emo_cond_emb.shape[-1]], device=text_tokens.device),
-                        alpha=emo_alpha
+                        emo_alpha,
+                        reuse_spk_cond,
                     )
 
                     if emo_vector is not None:

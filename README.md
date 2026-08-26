@@ -239,6 +239,25 @@ from indextts.infer_v2_5 import IndexTTS2
 tts = IndexTTS2(cfg_path="checkpoints/config.yaml", model_dir="checkpoints", use_bf16=True)
 ```
 
+IndexTTS-2.5 can optionally reuse the speaker conditioning for the default
+emotion reference:
+
+```python
+tts = IndexTTS2(
+    cfg_path="checkpoints/config.yaml",
+    model_dir="checkpoints",
+    reuse_spk_cond_for_emo=True,
+)
+```
+
+This opt-in mode skips one Wav2Vec2-BERT reference-encoding pass on a cache miss
+and one of the two conditioning-to-emotion-vector projections for each generated
+segment. It does not materially reduce resident memory. Speaker and emotion audio
+normally use different resampling paths, so enabling it may change the resulting
+voice or emotion. Explicit emotion audio, vectors, and text continue to use their
+normal paths. The same option is available in the WebUI as
+`uv run webui.py --reuse_spk_cond_for_emo`; it is not supported by IndexTTS-2.
+
 #### 1. Voice cloning with a single reference audio
 
 ```python

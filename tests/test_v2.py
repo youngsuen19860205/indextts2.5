@@ -8,6 +8,7 @@ CI only (no GPU):
     uv run --extra test pytest tests/test_v2.py -v -m "not gpu"
 """
 import importlib
+import inspect
 import sys
 import types
 from pathlib import Path
@@ -384,6 +385,132 @@ def test_qwen_emotion_convert_redirects_cross_key_labels(module_name, monkeypatc
     emotion_dict = emo.convert({"高兴": "自然"})
     assert emotion_dict["happy"] == 0.0
     assert emotion_dict["calm"] == 1.0
+
+
+# -- IndexTTS-2.5 default emotion conditioning reuse (no GPU) -----------------
+
+def _new_v25_reuse_stub(monkeypatch, enabled=True):
+    module = _load_qwen_emotion_module("indextts.infer_v2_5", monkeypatch)
+    tts = module.IndexTTS2.__new__(module.IndexTTS2)
+    tts.reuse_spk_cond_for_emo = enabled
+    return module, tts
+
+
+def test_25_reuse_spk_cond_constructor_option_defaults_off(monkeypatch):
+    module, _ = _new_v25_reuse_stub(monkeypatch)
+    parameter = inspect.signature(module.IndexTTS2.__init__).parameters["reuse_spk_cond_for_emo"]
+
+    assert parameter.default is False
+
+
+@pytest.mark.parametrize(
+    "enabled,emo_audio_prompt,emo_vector,use_emo_text,expected",
+    [
+        (False, None, None, False, False),
+        (True, None, None, False, True),
+        (True, "speaker.wav", None, False, False),
+        (True, None, [0.0] * 8, False, False),
+        (True, None, None, True, False),
+    ],
+)
+def test_25_reuse_spk_cond_only_applies_to_implicit_default_emotion(
+        monkeypatch, enabled, emo_audio_prompt, emo_vector, use_emo_text, expected):
+    _, tts = _new_v25_reuse_stub(monkeypatch, enabled=enabled)
+
+    assert tts._should_reuse_spk_cond_for_emo(
+        emo_audio_prompt,
+        emo_vector,
+        use_emo_text,
+    ) is expected
+
+
+def test_25_reuse_spk_cond_aliases_current_speaker_without_polluting_emo_cache(monkeypatch):
+    _, tts = _new_v25_reuse_stub(monkeypatch)
+    explicit_emo_cond = object()
+    tts.cache_emo_cond = explicit_emo_cond
+    tts.cache_emo_audio_prompt = "emotion.wav"
+    tts._load_and_cut_audio = lambda *args, **kwargs: pytest.fail("emotion audio must not be loaded")
+
+    first_spk_cond = object()
+    second_spk_cond = object()
+    assert tts._get_emo_cond_emb("speaker-a.wav", first_spk_cond, True, False) is first_spk_cond
+    assert tts._get_emo_cond_emb("speaker-b.wav", second_spk_cond, True, False) is second_spk_cond
+    assert tts.cache_emo_cond is explicit_emo_cond
+    assert tts.cache_emo_audio_prompt == "emotion.wav"
+
+
+def test_25_reuse_spk_cond_preserves_explicit_emo_audio_encoder_for_same_path(monkeypatch):
+    _, tts = _new_v25_reuse_stub(monkeypatch)
+    calls = []
+
+    class FakeTensor:
+        def to(self, device):
+            calls.append(("to", device))
+            return self
+
+    input_features = FakeTensor()
+    attention_mask = FakeTensor()
+    encoded_emo = object()
+    tts.device = "cpu"
+    tts.cache_emo_cond = None
+    tts.cache_emo_audio_prompt = None
+
+    def load_audio(*args, **kwargs):
+        calls.append(("load", args, kwargs))
+        return object(), 16000
+
+    tts._load_and_cut_audio = load_audio
+    tts.extract_features = lambda *args, **kwargs: {
+        "input_features": input_features,
+        "attention_mask": attention_mask,
+    }
+    tts.get_emb = lambda features, mask: calls.append(("encode", features, mask)) or encoded_emo
+
+    reuse_spk_cond = tts._should_reuse_spk_cond_for_emo("speaker.wav", None, False)
+    result = tts._get_emo_cond_emb("speaker.wav", object(), reuse_spk_cond, False)
+
+    assert reuse_spk_cond is False
+    assert result is encoded_emo
+    assert [call[0] for call in calls].count("load") == 1
+    assert [call[0] for call in calls].count("encode") == 1
+    assert tts.cache_emo_cond is encoded_emo
+    assert tts.cache_emo_audio_prompt == "speaker.wav"
+
+    assert tts._get_emo_cond_emb("speaker.wav", object(), False, False) is encoded_emo
+    assert [call[0] for call in calls].count("load") == 1
+    assert [call[0] for call in calls].count("encode") == 1
+
+
+def test_25_reuse_spk_cond_fast_path_uses_single_emovec_encoding(monkeypatch):
+    _, tts = _new_v25_reuse_stub(monkeypatch)
+
+    class FakeGpt:
+        def __init__(self):
+            self.get_calls = []
+            self.merge_calls = []
+
+        def get_emovec(self, cond, lengths):
+            self.get_calls.append((cond, lengths))
+            return "reused-emovec"
+
+        def merge_emovec(self, *args, **kwargs):
+            self.merge_calls.append((args, kwargs))
+            return "merged-emovec"
+
+    tts.gpt = FakeGpt()
+    spk_cond = object()
+    emo_cond = object()
+    spk_lengths = object()
+    emo_lengths = object()
+
+    assert tts._get_emovec(spk_cond, spk_cond, spk_lengths, spk_lengths, 1.0, True) == "reused-emovec"
+    assert len(tts.gpt.get_calls) == 1
+    assert tts.gpt.merge_calls == []
+
+    assert tts._get_emovec(spk_cond, emo_cond, spk_lengths, emo_lengths, 0.5, False) == "merged-emovec"
+    assert len(tts.gpt.get_calls) == 1
+    assert len(tts.gpt.merge_calls) == 1
+    assert tts.gpt.merge_calls[0][1] == {"alpha": 0.5}
 
 
 # -- Inference (GPU required) --------------------------------------------------
