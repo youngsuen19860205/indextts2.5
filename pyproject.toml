@@ -141,3 +141,11 @@ name = "pytorch-cuda"
 url = "https://download.pytorch.org/whl/cu128"
 # Only use this index when explicitly requested by `tool.uv.sources`.
 explicit = true
+
+[tool.ruff]
+# 仅用于本仓库新增的批量克隆代码（indextts_batch/ 与其测试）。
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

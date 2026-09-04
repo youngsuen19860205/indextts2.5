@@ -36,3 +36,12 @@ desktop.ini
 
 .claude
 .memsearch
+
+# 批量语音克隆项目（indextts_batch）。
+# 生成结果与用户参考音频不入库，但保留目录与示例说明。
+/gen_wav/*
+!/gen_wav/.gitkeep
+/reference/*.wav
+/reference/*.txt
+!/reference/README.md
+/cache/
