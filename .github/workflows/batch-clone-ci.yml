@@ -34,6 +34,8 @@ jobs:
         run: ruff format --check indextts_batch tests/test_batch_clone.py
 
       - name: Unit tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
         run: pytest tests/test_batch_clone.py -v
 
       - name: Shell script syntax check
