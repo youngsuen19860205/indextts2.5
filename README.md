@@ -15,6 +15,10 @@
 
 </div>
 
+> **本仓库附加项目**：面向 NVIDIA H20 + Ubuntu + Docker 的 **IndexTTS 2.5 批量语音克隆流水线**
+> （`reference/` → `gen_text/` → `gen_wav/`，输出统一为 16 kHz / 16-bit / 单声道 WAV）。
+> 中文使用文档见 [README_BATCH_ZH.md](README_BATCH_ZH.md)。
+
 IndexTTS is a zero-shot text-to-speech system that clones a voice from a single
 reference audio clip. The latest release, **IndexTTS-2.5**, supports Chinese,
 English, Japanese, Spanish and Arabic, with fine-grained emotion control,

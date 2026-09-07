@@ -1,0 +1,28 @@
+services:
+  indextts25:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: indextts2.5-batch:latest
+    # 需要宿主机安装 NVIDIA Container Toolkit
+    gpus: all
+    ipc: host
+    environment:
+      # 国内网络可改为 https://hf-mirror.com
+      HF_ENDPOINT: ${HF_ENDPOINT:-https://huggingface.co}
+      HF_HOME: /cache/huggingface
+      MODELSCOPE_CACHE: /cache/modelscope
+      INDEXTTS_MODEL_DIR: /workspace/checkpoints
+    volumes:
+      # 模型权重不打进镜像，运行时挂载
+      - ./checkpoints:/workspace/checkpoints
+      - ./reference:/workspace/reference
+      - ./gen_text:/workspace/gen_text
+      - ./gen_wav:/workspace/gen_wav
+      # Hugging Face / ModelScope 缓存持久化
+      - hf-cache:/cache
+    working_dir: /workspace
+    command: ["check-gpu"]
+
+volumes:
+  hf-cache:

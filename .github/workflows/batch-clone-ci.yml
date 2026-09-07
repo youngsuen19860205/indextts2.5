@@ -1,0 +1,44 @@
+name: batch-clone-ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  lint-and-test:
+    name: Lint + unit tests (no GPU, no model download)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install lightweight dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest ruff numpy soundfile soxr
+
+      - name: Ruff check
+        run: ruff check indextts_batch tests/test_batch_clone.py
+
+      - name: Ruff format check
+        run: ruff format --check indextts_batch tests/test_batch_clone.py
+
+      - name: Unit tests
+        env:
+          PYTHONPATH: ${{ github.workspace }}
+        run: pytest tests/test_batch_clone.py -v
+
+      - name: Shell script syntax check
+        run: |
+          bash -n scripts/download_models.sh
+          bash -n docker/entrypoint.sh
