@@ -3,7 +3,8 @@
 Examples::
 
     python -m indextts_batch.random_reference --random-reference-count 1 -- --lang en
-    python -m indextts_batch.random_reference --random-reference-count 3 --selection-seed 42 -- --dry-run
+    python -m indextts_batch.random_reference \
+        --random-reference-count 3 --selection-seed 42 -- --dry-run
 
 The selected references are passed to ``indextts_batch.cli.main`` in one call,
 so IndexTTS is still loaded only once for the whole batch.
@@ -94,9 +95,7 @@ def main(argv: list[str] | None = None) -> int:
 
     names = ", ".join(reference.name for reference in selected)
     seed_text = "系统随机" if args.selection_seed is None else str(args.selection_seed)
-    print(
-        f">> 随机选择 {len(selected)} 个 reference（selection_seed={seed_text}）: {names}"
-    )
+    print(f">> 随机选择 {len(selected)} 个 reference（selection_seed={seed_text}）: {names}")
 
     forwarded = ["--reference-dir", args.reference_dir]
     for reference in selected:
