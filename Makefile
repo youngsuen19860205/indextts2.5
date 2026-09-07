@@ -5,6 +5,7 @@
 #   make download    下载 IndexTTS 2.5 权重到 ./checkpoints
 #   make dry-run     只校验 reference/gen_text 配对并打印任务计划
 #   make generate    批量生成 16kHz/16bit/mono WAV 到 ./gen_wav
+#   make random-clone 从 speaker_wav_txt/gen_txt 随机选择并生成一条克隆语音到 ./gen_wav
 #   make shell       进入容器交互式 shell
 #   make test / make lint  本地无 GPU 的单元测试与静态检查
 
@@ -15,7 +16,7 @@ SOURCE ?= huggingface
 LANG_CODE ?= zh
 ARGS ?=
 
-.PHONY: build check-gpu download dry-run generate shell test lint format help
+.PHONY: build check-gpu download dry-run generate random-clone shell test lint format help
 
 help:
 	@grep -E '^#   ' $(MAKEFILE_LIST) | sed 's/^#   //'
@@ -35,15 +36,18 @@ dry-run:
 generate:
 	$(COMPOSE) run --rm $(SERVICE) generate --lang $(LANG_CODE) $(ARGS)
 
+random-clone:
+	$(COMPOSE) run --rm $(SERVICE) random-clone --lang $(LANG_CODE) $(ARGS)
+
 shell:
 	$(COMPOSE) run --rm $(SERVICE) shell
 
 test:
-	python -m pytest tests/test_batch_clone.py -v
+	python -m pytest tests/test_batch_clone.py tests/test_random_clone.py -v
 
 lint:
-	python -m ruff check indextts_batch tests/test_batch_clone.py
-	python -m ruff format --check indextts_batch tests/test_batch_clone.py
+	python -m ruff check indextts_batch tests/test_batch_clone.py tests/test_random_clone.py
+	python -m ruff format --check indextts_batch tests/test_batch_clone.py tests/test_random_clone.py
 
 format:
-	python -m ruff format indextts_batch tests/test_batch_clone.py
+	python -m ruff format indextts_batch tests/test_batch_clone.py tests/test_random_clone.py

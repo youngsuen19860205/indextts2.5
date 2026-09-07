@@ -37,12 +37,15 @@
 ├── indextts_batch/            # 批量推理程序（本项目新增）
 │   ├── tasks.py               # reference/gen_text 配对、任务规划、输出命名
 │   ├── audio.py               # 16kHz/16bit/mono 后处理与格式校验
-│   └── cli.py                 # 命令行入口（python -m indextts_batch）
+│   ├── cli.py                 # 命令行入口（python -m indextts_batch）
+│   └── random_clone.py        # 随机克隆入口（python -m indextts_batch.random_clone）
 ├── indextts/                  # 上游官方模型与推理代码
 ├── reference/                 # 参考音频 + 同名参考文本（见 reference/README.md）
 ├── gen_text/                  # 待合成文本，一个文件一条（见 gen_text/README.md）
 ├── gen_wav/                   # 生成结果 + manifest.jsonl（保留 .gitkeep）
-└── tests/test_batch_clone.py  # 无需 GPU / 无需模型的单元测试
+├── speaker_wav_txt/            # 随机克隆参考音色池（见 speaker_wav_txt/README.md）
+├── gen_txt/                    # 随机克隆目标文本池（见 gen_txt/README.md）
+└── tests/test_batch_clone.py, tests/test_random_clone.py  # 无需 GPU / 无需模型的单元测试
 ```
 
 ## 2. 前置条件（NVIDIA H20 + Ubuntu）
@@ -172,6 +175,75 @@ docker compose run --rm indextts25 generate --reference speaker_zh --lang zh
 | `--emo-alpha` / `--interval-silence` / `--max-text-tokens-per-segment` / `--duration-factor` / `--no-text-normalization` | 透传给上游 `infer()` 的推理参数 |
 | `--manifest` | manifest 路径，默认 `<gen-wav-dir>/manifest.jsonl`，`.csv` 后缀写 CSV |
 | `--skip-existing` / `--keep-raw` / `--continue-on-error` / `--dry-run` / `--verbose` | 其他控制项 |
+
+## 6bis. 随机批量克隆（speaker_wav_txt/gen_txt → gen_wav）
+
+`python -m indextts_batch.random_clone` 提供另一种输入方式：不逐一枚举所有
+reference × text 组合，而是**每次随机挑选**一个 speaker、该 speaker 下的一组
+参考 wav/txt，以及 `gen_txt/` 中的一条目标文本，生成一条克隆语音。内部复用
+与 `indextts_batch.cli` 相同的模型加载与 `IndexTTS2.infer()` 调用，未重复实现
+任何模型加载逻辑。
+
+目录结构：
+
+```
+speaker_wav_txt/
+├── alice/
+│   ├── a.wav   a.txt
+│   └── b.wav   b.txt
+└── bob/
+    └── c.wav   c.txt
+gen_txt/
+└── hello_zh.txt
+gen_wav/            # 输出目录，与批量克隆共用
+```
+
+运行方式：
+
+```bash
+# 本地（无需 GPU 校验配对/随机选择结果）：
+python -m indextts_batch.random_clone --dry-run --count 3 --seed 42
+
+# 正式生成：
+python -m indextts_batch.random_clone --count 3 --seed 42 --lang zh \
+  --speaker-wav-txt-dir speaker_wav_txt --gen-txt-dir gen_txt --gen-wav-dir gen_wav \
+  --model-dir checkpoints
+
+# Docker：
+make random-clone ARGS="--count 3 --seed 42"
+docker compose run --rm indextts25 random-clone --count 3 --seed 42
+```
+
+命名规则：生成的音频保存为 `gen_wav/<参考音 wav 前缀>_gen_wav.wav`；同时生成
+同名描述文件 `gen_wav/<参考音 wav 前缀>_gen_wav.txt`，内容示例：
+
+```
+speaker: alice
+reference_wav: speaker_wav_txt/alice/a.wav
+reference_text_file: speaker_wav_txt/alice/a.txt
+reference_text: 爱丽丝的参考文本。
+target_text_file: gen_txt/hello_zh.txt
+target_text: 你好，这是一条用于随机批量克隆演示的目标文本。
+language: zh
+output_wav: gen_wav/a_gen_wav.wav
+generated_at: 2026-01-01T00:00:00
+```
+
+若 `<前缀>_gen_wav.wav` 或 `<前缀>_gen_wav.txt` 已存在（wav、txt 任一个存在都算），
+不会覆盖，而是依次尝试 `_2`、`_3`……保证 wav 与描述 txt 始终成对同名。
+
+| 参数 | 说明 |
+| --- | --- |
+| `--speaker-wav-txt-dir` | 参考音色池根目录，默认 `speaker_wav_txt` |
+| `--gen-txt-dir` | 目标文本目录，默认 `gen_txt` |
+| `--gen-wav-dir` | 输出目录，默认 `gen_wav` |
+| `--count` / `-n` | 生成样本数量，默认 `1`（每条独立随机选择，允许重复选中同一组合） |
+| `--seed` | 随机选择用的种子；不设置时每次运行选择不同，设置后可复现同样的选择序列 |
+| 其余（`--model-dir` `--lang` `--device` `--fp32` `--emo-alpha` 等） | 与 `python -m indextts_batch` 含义相同，直接透传给上游 `infer()` |
+
+错误处理：目录不存在、没有有效 wav/txt 配对、`gen_txt` 中没有非空文本等输入
+错误会直接返回退出码 `2` 并打印中文错误信息；单条推理失败默认终止（返回 `1`），
+加 `--continue-on-error` 可继续处理其余样本。
 
 ## 7. 输出格式保证
 

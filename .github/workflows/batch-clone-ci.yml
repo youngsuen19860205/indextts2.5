@@ -28,15 +28,15 @@ jobs:
           python -m pip install pytest ruff numpy soundfile soxr
 
       - name: Ruff check
-        run: ruff check indextts_batch tests/test_batch_clone.py
+        run: ruff check indextts_batch tests/test_batch_clone.py tests/test_random_clone.py
 
       - name: Ruff format check
-        run: ruff format --check indextts_batch tests/test_batch_clone.py
+        run: ruff format --check indextts_batch tests/test_batch_clone.py tests/test_random_clone.py
 
       - name: Unit tests
         env:
           PYTHONPATH: ${{ github.workspace }}
-        run: pytest tests/test_batch_clone.py -v
+        run: pytest tests/test_batch_clone.py tests/test_random_clone.py -v
 
       - name: Shell script syntax check
         run: |

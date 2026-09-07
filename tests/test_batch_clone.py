@@ -332,6 +332,6 @@ class TestBatchRun:
         rows = list(
             csv.DictReader((gen_wav_dir / "manifest.csv").read_text(encoding="utf-8").splitlines())
         )
-        statuses = {row["text_file"].split("/")[-1]: row["status"] for row in rows}
+        statuses = {Path(row["text_file"]).name: row["status"] for row in rows}
         assert statuses == {"hello.txt": "failed", "second.txt": "ok"}
         assert "RuntimeError: boom" in "".join(row["error"] for row in rows)

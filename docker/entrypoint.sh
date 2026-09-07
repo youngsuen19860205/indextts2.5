@@ -13,6 +13,7 @@ usage() {
   download [source]    下载 IndexTTS 2.5 权重，source = huggingface|modelscope
   dry-run [参数...]    校验 reference/gen_text 配对并打印任务计划（不加载模型）
   generate [参数...]   执行批量语音克隆
+  random-clone [参数...] 从 speaker_wav_txt/gen_txt 随机选择并生成克隆语音
   shell                进入交互式 bash
   <其他>               直接作为命令执行
 EOF
@@ -52,6 +53,9 @@ case "$command" in
         ;;
     generate)
         exec python -m indextts_batch --model-dir "$MODEL_DIR" "$@"
+        ;;
+    random-clone)
+        exec python -m indextts_batch.random_clone --model-dir "$MODEL_DIR" "$@"
         ;;
     shell)
         exec /bin/bash

@@ -16,7 +16,9 @@
 </div>
 
 > **本仓库附加项目**：面向 NVIDIA H20 + Ubuntu + Docker 的 **IndexTTS 2.5 批量语音克隆流水线**
-> （`reference/` → `gen_text/` → `gen_wav/`，输出统一为 16 kHz / 16-bit / 单声道 WAV）。
+> （`reference/` → `gen_text/` → `gen_wav/`，输出统一为 16 kHz / 16-bit / 单声道 WAV），
+> 以及随机批量克隆入口 `python -m indextts_batch.random_clone`
+> （`speaker_wav_txt/<speaker>/` → `gen_txt/` → `gen_wav/`，随机选择说话人/参考音/目标文本）。
 > 中文使用文档见 [README_BATCH_ZH.md](README_BATCH_ZH.md)。
 
 IndexTTS is a zero-shot text-to-speech system that clones a voice from a single
