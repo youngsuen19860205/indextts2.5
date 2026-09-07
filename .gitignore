@@ -44,4 +44,7 @@ desktop.ini
 /reference/*.wav
 /reference/*.txt
 !/reference/README.md
+/speaker_wav_txt/*/*.wav
+/speaker_wav_txt/*/*.txt
+!/speaker_wav_txt/README.md
 /cache/

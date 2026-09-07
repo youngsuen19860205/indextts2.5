@@ -19,6 +19,8 @@ services:
       - ./reference:/workspace/reference
       - ./gen_text:/workspace/gen_text
       - ./gen_wav:/workspace/gen_wav
+      - ./speaker_wav_txt:/workspace/speaker_wav_txt
+      - ./gen_txt:/workspace/gen_txt
       # Hugging Face / ModelScope 缓存持久化
       - hf-cache:/cache
     working_dir: /workspace
